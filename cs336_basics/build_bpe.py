@@ -3,6 +3,7 @@ import os
 from cs336_basics.pretokenization_example import find_chunk_boundaries
 import regex as re
 from collections import Counter
+import multiprocessing as mp
 
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -124,22 +125,20 @@ def train_bpe(
     counts: Counter[tuple[bytes, ...]] = Counter()
 
     with open(input_path, "rb") as f:
-        num_chunks = 1
+        num_chunks = os.cpu_count() or 1
         boundaries = find_chunk_boundaries(f, num_chunks, special_tokens_bytes[0])
 
-        # The following is a serial implementation, but you can parallelize this
-        # by sending each start/end pair to a set of processes.
-        for start, end in zip(boundaries[:-1], boundaries[1:]):
-            f.seek(start)
-            chunk = f.read(end - start).decode("utf-8", errors="ignore")
-            # Run pre-tokenization on your chunk and store the counts for each pre-token
+    jobs: list[tuple[str, int, int, list[str]]] = [
+        (str(input_path), start, end, special_tokens)
+        for start, end in zip(boundaries[:-1], boundaries[1:])
+    ]
 
-            # Filter the special token
-            filtered_chunks = filter_special_tokens(special_tokens, chunk)
-            for filtered_chunk in filtered_chunks:
-                # Add each token to counts
-                add_counts_for_filtered_chunk(filtered_chunk, counts)
-    
+    with mp.Pool(processes=num_chunks) as pool:
+        chunk_counts_list = pool.map(count_chunk_worker, jobs)
+
+    for chunk_counts in chunk_counts_list:
+        counts.update(chunk_counts)
+
     while len(vocab) < max_vocab_size:
         # Process counts, get pair counts
         pair_counts: Counter[tuple[bytes, bytes]] = Counter()
