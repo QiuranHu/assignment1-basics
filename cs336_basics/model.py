@@ -73,3 +73,30 @@ class RMSNorm(nn.Module):
         rms = torch.sqrt(mean_square + self.eps)
         result = (x / rms) * self.weight
         return result.to(in_dtype)
+
+class SwiGLU(nn.Module):
+    def __init__(self, d_model: int, d_ff: int | None = None, device=None, dtype=None):
+        super().__init__()
+        if d_ff is None:
+            d_ff = int(8 * d_model / 3)
+            d_ff = ((d_ff + 63) // 64) * 64
+        self.d_ff = d_ff
+
+        # for the gate
+        self.w1 = Linear(d_model, d_ff, device=device, dtype=dtype)
+        # for the feature
+        self.w3 = Linear(d_model, d_ff, device=device, dtype=dtype)
+        # for project back to original size
+        self.w2 = Linear(d_ff, d_model, device=device, dtype=dtype)
+
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        gate = self.w1(x)
+        gate = gate * torch.sigmoid(gate)
+
+        features = self.w3(x)
+
+        hidden = gate * features
+        output = self.w2(hidden)
+
+        return output
