@@ -182,3 +182,60 @@ def scaled_dot_product_attention(
     attention_weights = softmax(scores, dim=-1)
     output = attention_weights @ V
     return output
+
+class CausalMultiHeadSelfAttention(nn.Module):
+    def __init__(self, d_model: int, num_heads: int):
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+        self.d_v = d_model // num_heads
+
+        self.q_proj = Linear(d_model, d_model) # Wq
+        self.k_proj = Linear(d_model, d_model) # Wk
+        self.v_proj = Linear(d_model, d_model) # Wv
+        self.output_proj = Linear(d_model, d_model) # Wo
+
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        Q = self.q_proj(x)
+        K = self.k_proj(x)
+        V = self.v_proj(x)
+
+        batch_size, seq_len, _ = Q.shape
+        Q = Q.view(batch_size, seq_len, self.num_heads, self.d_k)
+        K = K.view(batch_size, seq_len, self.num_heads, self.d_k)
+        V = V.view(batch_size, seq_len, self.num_heads, self.d_v)
+
+        # shape changes from (batch, seq_len, heads, d_k) to (batch, heads, seq_len, d_k)
+        # So we will have
+        # batch
+        #   head 0 -> all tokens
+        #   head 1 -> all tokens
+        #   ...
+        Q = Q.transpose(1, 2)
+        K = K.transpose(1, 2)
+        V = V.transpose(1, 2)
+
+        # To create a matrix like:
+        # [
+        #   [True, False, False],
+        #   [True, True, False],
+        #   [True, True, True]
+        # ]
+        mask = torch.tril(
+            torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device)
+        )
+        attention_output = scaled_dot_product_attention(Q, K, V, mask)
+
+        # Change the shape from (batch, heads, seq_len, d_v)
+        # to (batch, seq_len, heads, d_v)
+        # Because we need to group data by token
+        attention_output = attention_output.transpose(1, 2)
+
+        attention_output = attention_output.reshape(
+            batch_size, seq_len, self.d_model
+        )
+
+        attention_output = self.output_proj(attention_output)
+        return attention_output
